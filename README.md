@@ -14,7 +14,17 @@ This platform is built for **Windows internals research**, **forensic analysis**
 - **No Long-Lived Disk Artifacts**: Executable images are backed by transient or logically removed file objects.
 - **MEM_IMAGE Sections**: Created through native `NtCreateSection` calls with `SEC_IMAGE`.
 - **Manual Process Orchestration**: Process environment and threading are built manually, bypassing high-level Win32 abstractions.
-- **Minimal observable Metadata**: Engineered to exhibit forensic inconsistencies for research purposes.
+- **Forensic Ambiguity**: Engineered to exhibit forensic inconsistencies for research purposes (e.g., image name resolution anomalies).
+
+---
+
+## ✨ Advanced Research Features
+
+- **Manual PEB Population**: Bypasses default loader initialization. Supports manual construction of `RTL_USER_PROCESS_PARAMETERS` and string buffer isolation in remote memory.
+- **PPID Spoofing**: Supports arbitrary parent process assignment via `NtCreateProcessEx` to research parent-child relationship telemetry.
+- **Syscall Layer**: Research reference for indirect syscall patterns and SSN resolution.
+- **Manual Image Mapping**: Alternative mapping logic for research into memory-based execution without relying on `SEC_IMAGE`.
+- **Handle Table Telemetry**: Forensic analysis of process handle tables via `ProcessHandleInformation`.
 
 ---
 
@@ -35,29 +45,15 @@ graph TD
 
 ### High-Level Modules
 
-- **`core/`**: NT API dynamic resolution, undocumented structures, and Object Manager utilities.
-- **`image/`**: Manual PE header parsing and memory-backed section construction.
-- **`process/`**: Orchestration of `NtCreateProcessEx` and manual thread initialization.
-- **`evasion/`**: Observational telemetry and footprint analysis (Handle tables, Image name resolution).
-- **`utils/`**: RAII handle wrappers, logging, and granular exception handling.
-
----
-
-## ⚙️ Technical Requirements
-
-- **Language**: C++20 (Modern C++ standards).
-- **Tooling**: MSVC (Visual Studio 2022+) or `clang-cl`.
-- **Dependency**: Zero CRT dependency where avoidable; minimal reliance on standard Win32 exports.
-- **OS Compatibility**: Windows 10 / 11 (x64).
+- **`core/`**: NT API dynamic resolution, memory manipulation, and syscall research placeholders.
+- **`image/`**: Hardened PE header parsing and memory-backed section construction.
+- **`process/`**: Orchestration of `NtCreateProcessEx` and manual remote PEB population.
+- **`evasion/`**: Observational telemetry and forensic footprint analysis.
+- **`utils/`**: RAII handle wrappers, logging, and granular `NTSTATUS` translation.
 
 ---
 
 ## 🚀 Getting Started
-
-### Prerequisites
-
-- [CMake](https://cmake.org/download/) (3.20+)
-- [Visual Studio](https://visualstudio.microsoft.com/) with C++ Desktop Development workload.
 
 ### Building
 
@@ -66,9 +62,8 @@ graph TD
 git clone https://github.com/ismailtsdln/NullSection.git
 cd NullSection
 
-# Configure and build
-mkdir build
-cd build
+# Configure and build (CMake 3.20+)
+mkdir build && cd build
 cmake ..
 cmake --build . --config Release
 ```
@@ -78,44 +73,34 @@ cmake --build . --config Release
 Run a payload from a transient file object:
 
 ```bash
-nullsection.exe run --image C:\path\to\your\payload.exe
+nullsection.exe run --image C:\path\to\payload.exe
 ```
 
-Analyze process telemetry (Research Mode):
+Advanced Research: Manual PEB and PPID Spoofing:
 
 ```bash
-nullsection.exe inspect --image payload.exe
+nullsection.exe run --image C:\path\to\payload.exe --manual-peb --ppid 1234
 ```
 
 ---
 
-## 🕵️ Research & Evasion Layer
+## 🛠️ Reliability & Safety
 
-NullSection provides built-in tools for observational research:
+The framework has been hardened with professional-grade safety features:
 
-- **Handle Table Visibility**: Analysis of how the transient file handle is managed in the process object.
-- **Image Name Resolution**: Monitoring inconsistencies in how user-mode tools (e.g., Process Hacker, Sysmon) resolve the process backing image.
-- **Remote PEB Manipulation**: Demonstration of manual Environment Block and Process Parameter population.
-
----
-
-## 🛠️ Error Handling & Reliability
-
-The framework implements a professional, granular exception system:
-
-- **`NtException`**: Translates cryptic `NTSTATUS` (e.g., `0xC0000005`) into human-readable strings.
-- **`Win32Exception`**: Standardized reporting for Win32 API failures.
-- **Defensive Validation**: Strict input sanitization for all pointers and file paths.
+- **Remote Pointer Safety**: `PebBuilder` correctly handles remote memory allocation for string data, ensuring pointers are valid in the target process.
+- **Hardened PE Parsing**: Strict validation for `e_lfanew` and section headers prevents crashes on malformed research binaries.
+- **Granular Exceptions**: Specialized `NtException` system with an expanded `NTSTATUS` translation dictionary.
 
 ---
 
-## 🧾 Documentation & Reference
+## 🧾 Documentation
 
 - **[Implementation Walkthrough](walkthrough.md)**: Detailed breakdown of the execution flow.
-- **[Task List](task.md)**: Current development status and roadmap.
+- **[Task Roadmap](task.md)**: Current development status and research goals.
 
 ---
 
 ## 🔚 Final Notes
 
-NullSection is engineered to feel like it was written by a Windows kernel engineer. It prioritizes **correctness over obfuscation** and **documentation over secrecy**. Every undocumented behavior leveraged in this framework is documented for the academic benefit of senior security researchers.
+NullSection is engineered to feel like it was written by a Windows kernel engineer. It prioritizes **correctness over obfuscation** and **documentation over secrecy**.
