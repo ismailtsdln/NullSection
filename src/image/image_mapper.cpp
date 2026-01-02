@@ -32,26 +32,40 @@ PVOID ImageMapper::MapImageManually(HANDLE processHandle,
           "Failed to allocate remote memory for manual mapping", status);
   }
 
-  // 2. Write headers
-  status = core::NtApi::Instance().NtWriteVirtualMemory(
-      processHandle, remoteBase, localBuffer,
-      headers.nt_headers->OptionalHeader.SizeOfHeaders, nullptr);
-  if (status != 0)
-    throw utils::NtException("Failed to write PE headers to remote process",
-                             status);
-
-  // 3. Write sections
-  for (const auto &section : headers.sections) {
-    PVOID remoteSectionAddr = (PBYTE)remoteBase + section->VirtualAddress;
-    PVOID localSectionAddr = (PBYTE)localBuffer + section->PointerToRawData;
-
+  try {
+    // 2. Write headers
     status = core::NtApi::Instance().NtWriteVirtualMemory(
-        processHandle, remoteSectionAddr, localSectionAddr,
-        section->SizeOfRawData, nullptr);
+        processHandle, remoteBase, localBuffer,
+        headers.nt_headers->OptionalHeader.SizeOfHeaders, nullptr);
     if (status != 0)
-      throw utils::NtException("Failed to write section: " +
-                                   std::string((char *)section->Name, 8),
+      throw utils::NtException("Failed to write PE headers to remote process",
                                status);
+
+    // 3. Write sections
+    for (const auto &section : headers.sections) {
+      if (section->SizeOfRawData == 0)
+        continue;
+
+      PVOID remoteSectionAddr = (PBYTE)remoteBase + section->VirtualAddress;
+      PVOID localSectionAddr = (PBYTE)localBuffer + section->PointerToRawData;
+
+      status = core::NtApi::Instance().NtWriteVirtualMemory(
+          processHandle, remoteSectionAddr, localSectionAddr,
+          section->SizeOfRawData, nullptr);
+      if (status != 0)
+        throw utils::NtException("Failed to write section: " +
+                                     std::string((char *)section->Name, 8),
+                                 status);
+    }
+  } catch (...) {
+    // In a production tool, we'd free remoteBase here.
+    // In a research framework, we might keep it for inspection, but let's log
+    // it.
+    utils::Logger::Log(
+        utils::LogLevel::ERROR,
+        "Manual mapping failed. Remote allocation may remain at " +
+            std::to_string(reinterpret_cast<uintptr_t>(remoteBase)));
+    throw;
   }
 
   utils::Logger::Log(utils::LogLevel::DEBUG, "Manual mapping logic complete.");

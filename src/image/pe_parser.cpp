@@ -11,6 +11,7 @@ std::optional<PeHeaders> PeParser::Parse(void *buffer, size_t size) {
     return std::nullopt;
   }
 
+  // 1. Basic size check for DOS header
   if (size < sizeof(IMAGE_DOS_HEADER)) {
     utils::Logger::Log(utils::LogLevel::ERROR,
                        "PE Parser: Buffer too small for DOS header.");
@@ -24,10 +25,11 @@ std::optional<PeHeaders> PeParser::Parse(void *buffer, size_t size) {
     return std::nullopt;
   }
 
-  if (size <
-      static_cast<size_t>(dos_header->e_lfanew) + sizeof(IMAGE_NT_HEADERS)) {
+  // 2. Validate e_lfanew
+  if (dos_header->e_lfanew < 0 || static_cast<size_t>(dos_header->e_lfanew) >
+                                      size - sizeof(IMAGE_NT_HEADERS)) {
     utils::Logger::Log(utils::LogLevel::ERROR,
-                       "PE Parser: Buffer too small for NT headers.");
+                       "PE Parser: Invalid e_lfanew offset.");
     return std::nullopt;
   }
 
@@ -39,23 +41,34 @@ std::optional<PeHeaders> PeParser::Parse(void *buffer, size_t size) {
     return std::nullopt;
   }
 
+  // 3. Validate Section Headers coverage
+  size_t sectionHeadersOffset = dos_header->e_lfanew +
+                                FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader) +
+                                nt_headers->FileHeader.SizeOfOptionalHeader;
+  size_t totalSectionsSize =
+      nt_headers->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+
+  if (sectionHeadersOffset + totalSectionsSize > size) {
+    utils::Logger::Log(utils::LogLevel::ERROR,
+                       "PE Parser: Buffer too small for all section headers.");
+    return std::nullopt;
+  }
+
   PeHeaders headers;
   headers.dos_header = dos_header;
   headers.nt_headers = nt_headers;
 
-  auto section_ptr = IMAGE_FIRST_SECTION(nt_headers);
-
-  // Safety check for section headers
-  if (size < static_cast<size_t>(dos_header->e_lfanew) +
-                 sizeof(IMAGE_NT_HEADERS) +
-                 (nt_headers->FileHeader.NumberOfSections *
-                  sizeof(IMAGE_SECTION_HEADER))) {
-    utils::Logger::Log(utils::LogLevel::ERROR,
-                       "PE Parser: Buffer too small for section headers.");
-    return std::nullopt;
-  }
+  auto section_ptr = reinterpret_cast<PIMAGE_SECTION_HEADER>(
+      static_cast<BYTE *>(buffer) + sectionHeadersOffset);
 
   for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; ++i) {
+    // Validate each section's data is within buffer (for local parsing safety)
+    if (section_ptr[i].PointerToRawData + section_ptr[i].SizeOfRawData > size) {
+      utils::Logger::Log(utils::LogLevel::WARNING,
+                         "PE Parser: Section " + std::to_string(i) +
+                             " points outside buffer.");
+      // We still add it, but it's a warning for the caller (Manual Mapper)
+    }
     headers.sections.push_back(&section_ptr[i]);
   }
 

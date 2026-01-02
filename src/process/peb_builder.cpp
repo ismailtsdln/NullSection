@@ -36,56 +36,92 @@ bool PebBuilder::PopulatePeb(HANDLE processHandle, PVOID pebAddress,
   if (!processHandle || !pebAddress)
     return false;
 
-  // 1. Initialize Process Parameters locally
-  RTL_USER_PROCESS_PARAMETERS params = {0};
-  params.Length = sizeof(RTL_USER_PROCESS_PARAMETERS);
-  params.MaximumLength = sizeof(RTL_USER_PROCESS_PARAMETERS);
-  params.Flags = 1; // RTL_USER_PROC_PARAMS_NORMALIZED
-
+  // 1. Initialize local UNICODE_STRINGs
   UNICODE_STRING usImagePath =
       core::ObjectManager::CreateUnicodeString(imagePath);
   UNICODE_STRING usCommandLine =
       core::ObjectManager::CreateUnicodeString(commandLine);
 
-  params.ImagePathName = usImagePath;
-  params.CommandLine = usCommandLine;
-
-  // 2. Allocate memory in remote process for parameters
+  PVOID remoteImagePathBuffer = nullptr;
+  PVOID remoteCommandLineBuffer = nullptr;
   PVOID remoteParams = nullptr;
-  SIZE_T regionSize = sizeof(RTL_USER_PROCESS_PARAMETERS) +
-                      usImagePath.MaximumLength + usCommandLine.MaximumLength;
 
-  NTSTATUS status = core::NtApi::Instance().NtAllocateVirtualMemory(
-      processHandle, &remoteParams, 0, &regionSize, MEM_COMMIT | MEM_RESERVE,
-      PAGE_READWRITE);
+  try {
+    // 2. Allocate remote buffers for strings
+    SIZE_T imagePathSize = usImagePath.MaximumLength;
+    SIZE_T cmdLineSize = usCommandLine.MaximumLength;
 
-  if (status != 0) {
+    NTSTATUS status = core::NtApi::Instance().NtAllocateVirtualMemory(
+        processHandle, &remoteImagePathBuffer, 0, &imagePathSize,
+        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (status != 0)
+      throw utils::NtException("Failed to allocate remote ImagePath buffer",
+                               status);
+
+    status = core::NtApi::Instance().NtAllocateVirtualMemory(
+        processHandle, &remoteCommandLineBuffer, 0, &cmdLineSize,
+        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (status != 0)
+      throw utils::NtException("Failed to allocate remote CommandLine buffer",
+                               status);
+
+    // 3. Write string data to remote buffers
+    status = core::NtApi::Instance().NtWriteVirtualMemory(
+        processHandle, remoteImagePathBuffer, usImagePath.Buffer,
+        usImagePath.Length, nullptr);
+    if (status != 0)
+      throw utils::NtException("Failed to write remote ImagePath buffer",
+                               status);
+
+    status = core::NtApi::Instance().NtWriteVirtualMemory(
+        processHandle, remoteCommandLineBuffer, usCommandLine.Buffer,
+        usCommandLine.Length, nullptr);
+    if (status != 0)
+      throw utils::NtException("Failed to write remote CommandLine buffer",
+                               status);
+
+    // 4. Initialize Process Parameters with remote pointers
+    RTL_USER_PROCESS_PARAMETERS params = {0};
+    params.Length = sizeof(RTL_USER_PROCESS_PARAMETERS);
+    params.MaximumLength = sizeof(RTL_USER_PROCESS_PARAMETERS);
+    params.Flags = 1; // RTL_USER_PROC_PARAMS_NORMALIZED
+
+    params.ImagePathName = usImagePath;
+    params.ImagePathName.Buffer = (PWSTR)remoteImagePathBuffer;
+
+    params.CommandLine = usCommandLine;
+    params.CommandLine.Buffer = (PWSTR)remoteCommandLineBuffer;
+
+    // 5. Allocate remote memory for the parameters structure
+    SIZE_T paramsSize = sizeof(RTL_USER_PROCESS_PARAMETERS);
+    status = core::NtApi::Instance().NtAllocateVirtualMemory(
+        processHandle, &remoteParams, 0, &paramsSize, MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE);
+    if (status != 0)
+      throw utils::NtException("Failed to allocate remote process parameters",
+                               status);
+
+    // 6. Write the parameters structure
+    status = core::NtApi::Instance().NtWriteVirtualMemory(
+        processHandle, remoteParams, &params, sizeof(params), nullptr);
+    if (status != 0)
+      throw utils::NtException("Failed to write process parameters", status);
+
+    // 7. Update PEB's ProcessParameters pointer
+    PVOID paramsPtrAddr = (PBYTE)pebAddress + 0x20; // Offset 0x20 on x64 PEB
+    status = core::NtApi::Instance().NtWriteVirtualMemory(
+        processHandle, paramsPtrAddr, &remoteParams, sizeof(PVOID), nullptr);
+    if (status != 0)
+      throw utils::NtException("Failed to update PEB ProcessParameters",
+                               status);
+
+  } catch (...) {
+    // Basic cleanup on failure (Note: In a research framework, partial
+    // allocations might be left for analysis)
     core::ObjectManager::FreeUnicodeString(usImagePath);
     core::ObjectManager::FreeUnicodeString(usCommandLine);
-    throw utils::NtException("Failed to allocate remote process parameters",
-                             status);
+    throw;
   }
-
-  // 3. Adjust pointers for remote process
-  // This is a simplified version; in a real-world scenario, we'd copy the
-  // strings separately and update the UNICODE_STRING buffers to point to remote
-  // addresses.
-
-  // For research purposes, we log the action and perform a basic write
-  status = core::NtApi::Instance().NtWriteVirtualMemory(
-      processHandle, remoteParams, &params, sizeof(params), nullptr);
-
-  if (status != 0)
-    throw utils::NtException("Failed to write process parameters", status);
-
-  // 4. Update PEB's ProcessParameters pointer
-  // ProcessParameters is at offset 0x20 on x64 PEB
-  PVOID paramsPtrAddr = (PBYTE)pebAddress + 0x20;
-  status = core::NtApi::Instance().NtWriteVirtualMemory(
-      processHandle, paramsPtrAddr, &remoteParams, sizeof(PVOID), nullptr);
-
-  if (status != 0)
-    throw utils::NtException("Failed to update PEB ProcessParameters", status);
 
   core::ObjectManager::FreeUnicodeString(usImagePath);
   core::ObjectManager::FreeUnicodeString(usCommandLine);
