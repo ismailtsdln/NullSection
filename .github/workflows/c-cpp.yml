@@ -1,0 +1,64 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CMAKE_BUILD_TYPE: Release
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # Setup compiler
+    - name: Set up ${{ matrix.compiler }}
+      run: |
+        if [ "${{ matrix.compiler }}" == "gcc" ]; then
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ cmake cppcheck
+        else
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake cppcheck
+        fi
+
+    # Configure project with CMake
+    - name: Configure project
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
+
+    # Build project
+    - name: Build
+      run: cmake --build build -- -j$(nproc)
+
+    # Run tests
+    - name: Run tests
+      run: ctest --output-on-failure --test-dir build
+
+    # Static analysis
+    - name: Static analysis
+      run: cppcheck --enable=all --inconclusive --std=c++17 --force .
+
+    # Optional: Clang-Tidy (if using clang)
+    - name: Clang-Tidy analysis
+      if: matrix.compiler == 'clang'
+      run: |
+        clang-tidy $(find . -name '*.cpp') -- -I.
+
+    # Optional: Generate coverage report
+    - name: Coverage (if using GCC)
+      if: matrix.compiler == 'gcc'
+      run: |
+        sudo apt-get install -y lcov
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage"
+        cmake --build build -- -j$(nproc)
+        ctest --test-dir build
+        lcov --capture --directory build --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' --output-file coverage.info
+        lcov --list coverage.info
