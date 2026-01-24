@@ -58,13 +58,14 @@ PVOID ImageMapper::MapImageManually(HANDLE processHandle,
                                  status);
     }
   } catch (...) {
-    // In a production tool, we'd free remoteBase here.
-    // In a research framework, we might keep it for inspection, but let's log
-    // it.
+    // Free the allocated remote memory on failure
+    if (remoteBase != nullptr) {
+      SIZE_T freeSize = 0;
+      core::NtApi::Instance().NtFreeVirtualMemory(processHandle, &remoteBase, &freeSize, MEM_RELEASE);
+    }
     utils::Logger::Log(
         utils::LogLevel::ERROR,
-        "Manual mapping failed. Remote allocation may remain at " +
-            std::to_string(reinterpret_cast<uintptr_t>(remoteBase)));
+        "Manual mapping failed. Remote allocation has been freed.");
     throw;
   }
 
