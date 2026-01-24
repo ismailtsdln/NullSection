@@ -14,8 +14,10 @@ else()
 endif()
 
 # NullSection Core library
+add_library(nullsection_core STATIC
     src/core/nt_api.cpp
     src/core/syscalls.cpp
+    src/core/syscall_stub.asm
     src/image/pe_parser.cpp
     src/image/image_mapper.cpp
     src/image/section_builder.cpp
